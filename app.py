@@ -10,11 +10,12 @@ import time
 import concurrent.futures
 import json
 import os
+import uuid  # <--- NOUVEAU : Pour générer des IDs uniques
 
 # ==========================================
 # 1. CONFIGURATION & STYLE
 # ==========================================
-st.set_page_config(page_title="Market God v8 (Fusion + Save)", layout="wide", page_icon="⚡")
+st.set_page_config(page_title="Market God v8.2 (Fixed)", layout="wide", page_icon="⚡")
 
 st.markdown("""
 <style>
@@ -34,27 +35,42 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. GESTION DE LA SAUVEGARDE (PERSISTANCE)
+# 2. GESTION DE LA SAUVEGARDE
 # ==========================================
 PORTFOLIO_FILE = "portfolio.json"
 
 def load_portfolio():
-    """Charge le portefeuille depuis le fichier JSON s'il existe."""
     if os.path.exists(PORTFOLIO_FILE):
         try:
             with open(PORTFOLIO_FILE, "r") as f:
-                return json.load(f)
+                data = json.load(f)
+                # Migration : on s'assure que les anciens items ont un ID
+                for item in data:
+                    if 'id' not in item:
+                        item['id'] = str(uuid.uuid4())
+                return data
         except:
-            return [] # Retourne vide si erreur
+            return []
     return []
 
 def save_portfolio(portfolio_data):
-    """Sauvegarde le portefeuille dans le fichier JSON."""
     try:
         with open(PORTFOLIO_FILE, "w") as f:
             json.dump(portfolio_data, f)
     except Exception as e:
-        st.error(f"Erreur de sauvegarde : {e}")
+        st.error(f"Erreur sauvegarde : {e}")
+
+# Fonction de suppression (Callback)
+def delete_trade_callback(trade_id):
+    # On filtre la liste pour garder tout sauf l'ID ciblé
+    st.session_state.portfolio = [p for p in st.session_state.portfolio if p.get('id') != trade_id]
+    save_portfolio(st.session_state.portfolio)
+    
+    # On supprime aussi des résultats d'analyse si présents pour éviter un bug d'affichage
+    if 'analysis_results' in st.session_state:
+        st.session_state.analysis_results = [r for r in st.session_state.analysis_results if r.get('id') != trade_id]
+    
+    st.success("Position supprimée !")
 
 # ==========================================
 # 3. LISTE DES MARCHÉS
@@ -134,7 +150,6 @@ def add_indicators(df):
     data['Vol_20d'] = data['Ret_1d'].rolling(20).std()
     return data.dropna()
 
-# --- 1. FONCTION POUR LE PORTFOLIO (AVEC PRIX D'ENTRÉE) ---
 def analyze_portfolio_position(ticker, position_type, entry_price):
     try:
         df = get_clean_data(ticker, period="2y")
@@ -165,14 +180,12 @@ def analyze_portfolio_position(ticker, position_type, entry_price):
         avg_prob_up = np.mean(probs)
         curr_price = df['Close'].iloc[-1]
         
-        # PnL Calculation
         pnl_pct = 0.0
         if position_type == "ACHAT (Long)":
             pnl_pct = (curr_price - entry_price) / entry_price
         else: 
             pnl_pct = (entry_price - curr_price) / entry_price
 
-        # Conseil
         conseil = "NEUTRE"
         danger = False
         message = ""
@@ -181,25 +194,25 @@ def analyze_portfolio_position(ticker, position_type, entry_price):
             if avg_prob_up < 0.35: 
                 conseil = "🔴 VENDRE"
                 danger = True
-                message = f"Risque de chute ({100-avg_prob_up*100:.0f}%)."
+                message = f"Risque chute ({100-avg_prob_up*100:.0f}%)."
             elif avg_prob_up > 0.60:
                 conseil = "🟢 GARDER"
                 message = "Hausse probable."
             else:
                 conseil = "🟡 ATTENDRE"
-                message = "Marché indécis."
+                message = "Indécis."
                 
         elif position_type == "VENTE (Short)":
             if avg_prob_up > 0.65:
                 conseil = "🔴 COUPER"
                 danger = True
-                message = f"Risque de hausse ({avg_prob_up*100:.0f}%)."
+                message = f"Risque hausse ({avg_prob_up*100:.0f}%)."
             elif avg_prob_up < 0.40:
                 conseil = "🟢 GARDER"
                 message = "Baisse probable."
             else:
                 conseil = "🟡 ATTENDRE"
-                message = "Marché indécis."
+                message = "Indécis."
 
         return {
             "Ticker": ticker, "Price": curr_price, "Entry": entry_price,
@@ -208,13 +221,13 @@ def analyze_portfolio_position(ticker, position_type, entry_price):
         }
     except: return None
 
-# --- 2. FONCTION COMPLEXE (ANALYSE SOLO - v5 Style) ---
+# --- ANALYSE SOLO ---
 def deep_scan_asset(df):
     features = ['RSI', 'BB_Pct', 'Ret_1d', 'Vol_20d']
     horizons = [3, 5, 10]
     models = {
-        "Random Forest 🌳": RandomForestClassifier(n_estimators=100, max_depth=5, random_state=42),
-        "Gradient Boosting 🚀": GradientBoostingClassifier(n_estimators=50, max_depth=3, random_state=42),
+        "Random Forest": RandomForestClassifier(n_estimators=100, max_depth=5, random_state=42),
+        "Gradient Boosting": GradientBoostingClassifier(n_estimators=50, max_depth=3, random_state=42),
     }
     best_res = None
     best_score = 0
@@ -243,7 +256,7 @@ def deep_scan_asset(df):
             except: continue
     return best_res
 
-# --- 3. FONCTION RAPIDE (LIVE MONITOR - v5 Style avec RSI) ---
+# --- LIVE MONITOR ---
 def quick_analyze(ticker):
     try:
         df = get_clean_data(ticker, period="1y")
@@ -266,7 +279,7 @@ def quick_analyze(ticker):
             "Price": curr_price,
             "Change": change,
             "Prob_Up": prob,
-            "RSI": df['RSI'].iloc[-1] # Le retour du RSI
+            "RSI": df['RSI'].iloc[-1]
         }
     except: return None
 
@@ -282,10 +295,15 @@ app_mode = st.sidebar.radio("Choisir le mode :", ["💼 GESTION PORTFOLIO", "�
 if app_mode == "💼 GESTION PORTFOLIO":
     st.title("💼 Mon Portefeuille & PnL")
     
-    # --- CHARGEMENT DU PORTEFEUILLE SAUVEGARDÉ ---
+    # Chargement
     if 'portfolio' not in st.session_state:
         st.session_state.portfolio = load_portfolio()
+    
+    # Init du cache des résultats pour éviter qu'ils disparaissent
+    if 'analysis_results' not in st.session_state:
+        st.session_state.analysis_results = None
 
+    # Formulaire d'ajout
     with st.expander("➕ Ajouter une position", expanded=False):
         c1, c2 = st.columns(2)
         with c1:
@@ -298,57 +316,90 @@ if app_mode == "💼 GESTION PORTFOLIO":
         if st.button("Ajouter"):
             if entry_input > 0:
                 ticker_code = NAME_TO_TICKER[nom_asset]
-                if not any(d['Ticker'] == ticker_code for d in st.session_state.portfolio):
-                    st.session_state.portfolio.append({
-                        "Ticker": ticker_code, "Nom": nom_asset, "Sens": sens, "Entry": entry_input
-                    })
-                    save_portfolio(st.session_state.portfolio) # SAUVEGARDE IMMÉDIATE
-                    st.success("Ajouté et sauvegardé !")
-                else: st.warning("Déjà présent.")
+                # On ajoute un ID unique pour pouvoir supprimer précisément cet ordre
+                new_trade = {
+                    "id": str(uuid.uuid4()),
+                    "Ticker": ticker_code, "Nom": nom_asset, 
+                    "Sens": sens, "Entry": entry_input
+                }
+                st.session_state.portfolio.append(new_trade)
+                save_portfolio(st.session_state.portfolio)
+                st.success("Ajouté et sauvegardé !")
+                st.rerun()
+            else:
+                st.error("Prix invalide")
 
     st.markdown("---")
+
+    # Bouton d'analyse
     if len(st.session_state.portfolio) > 0:
         if st.button("🔄 ACTUALISER PROFITS", type="primary"):
-            with st.spinner("Analyse..."):
-                results_p = []
+            with st.spinner("Analyse des positions..."):
+                results = []
                 for pos in st.session_state.portfolio:
                     res = analyze_portfolio_position(pos['Ticker'], pos['Sens'], pos['Entry'])
                     if res:
-                        res.update(pos)
-                        results_p.append(res)
-                for item in results_p:
-                    border = "#ff4b4b" if item['Danger'] else ("#00ff00" if "GARDER" in item['Conseil'] else "#eba434")
-                    pnl_class = "pnl-green" if item['PnL'] >= 0 else "pnl-red"
-                    signe = "+" if item['PnL'] >= 0 else ""
-                    
-                    with st.container():
-                        st.markdown(f"""
-                        <div style="border: 2px solid {border}; border-radius: 10px; padding: 15px; margin-bottom: 15px; background-color: #1e1e1e;">
-                            <div style="display:flex; justify-content:space-between; align-items:center;">
-                                <h3 style="margin:0;">{item['Nom']} <span style="font-size:0.7em; color:gray;">({item['Sens']})</span></h3>
-                                <div style="text-align:right;">
-                                    <span style="font-size:0.9em;">PnL:</span> <span class="{pnl_class}">{signe}{item['PnL']:.2%}</span>
-                                </div>
+                        res.update(pos) # Fusionne infos techniques + infos perso
+                        results.append(res)
+                st.session_state.analysis_results = results # On stocke le résultat
+
+        # AFFICHAGE DES RÉSULTATS (ou de la liste simple si pas encore analysé)
+        # On utilise analysis_results s'il existe, sinon on affiche juste la liste brute
+        
+        display_list = st.session_state.analysis_results if st.session_state.analysis_results else st.session_state.portfolio
+        
+        for item in display_list:
+            # Est-ce qu'on a les données d'analyse ?
+            has_analysis = 'PnL' in item
+            
+            # Styles par défaut
+            border = "#444"
+            pnl_txt = "N/A"
+            conseil_txt = "Non analysé"
+            message_txt = "Cliquez sur ACTUALISER"
+            
+            if has_analysis:
+                border = "#ff4b4b" if item['Danger'] else ("#00ff00" if "GARDER" in item['Conseil'] else "#eba434")
+                pnl_class = "pnl-green" if item['PnL'] >= 0 else "pnl-red"
+                signe = "+" if item['PnL'] >= 0 else ""
+                pnl_txt = f'<span class="{pnl_class}">{signe}{item["PnL"]:.2%}</span>'
+                conseil_txt = f'<b style="color:{border};">{item["Conseil"]}</b>'
+                message_txt = item['Message']
+                current_price_txt = f"{item['Price']:.2f}"
+            else:
+                current_price_txt = "?"
+
+            with st.container():
+                col_content, col_del = st.columns([6, 1])
+                
+                with col_content:
+                    st.markdown(f"""
+                    <div style="border: 2px solid {border}; border-radius: 10px; padding: 15px; margin-bottom: 10px; background-color: #1e1e1e;">
+                        <div style="display:flex; justify-content:space-between; align-items:center;">
+                            <h3 style="margin:0;">{item['Nom']} <span style="font-size:0.7em; color:gray;">({item['Sens']})</span></h3>
+                            <div style="text-align:right;">
+                                <span style="font-size:0.9em;">PnL:</span> {pnl_txt}
                             </div>
-                            <hr style="margin:5px 0; border-color:#333;">
-                            <div style="display:flex; justify-content:space-between;">
-                                <div><p style="margin:0;">Entrée: <b>{item['Entry']:.2f}$</b> | Actuel: <b>{item['Price']:.2f}$</b></p></div>
-                                <div style="text-align:right;"><b style="color:{border};">{item['Conseil']}</b></div>
-                            </div>
-                        </div>""", unsafe_allow_html=True)
-                        if st.button(f"🗑️ {item['Ticker']}", key=f"del_{item['Ticker']}"):
-                            st.session_state.portfolio = [x for x in st.session_state.portfolio if x['Ticker'] != item['Ticker']]
-                            save_portfolio(st.session_state.portfolio) # SAUVEGARDE APRÈS SUPPRESSION
-                            st.rerun()
-        else:
-            for pos in st.session_state.portfolio: st.write(f"🔹 {pos['Nom']} ({pos['Entry']}$)")
-            if st.button("Tout effacer"):
-                st.session_state.portfolio = []
-                save_portfolio([]) # SAUVEGARDE DE LA LISTE VIDE
-                st.rerun()
+                        </div>
+                        <hr style="margin:5px 0; border-color:#333;">
+                        <div style="display:flex; justify-content:space-between;">
+                            <div><p style="margin:0;">Entrée: <b>{item['Entry']:.2f}$</b> | Actuel: <b>{current_price_txt}$</b></p></div>
+                            <div style="text-align:right;">{conseil_txt}</div>
+                        </div>
+                        <p style="margin:5px 0 0 0; font-size:0.8em; color:#ccc;"><i>{message_txt}</i></p>
+                    </div>""", unsafe_allow_html=True)
+                
+                with col_del:
+                    # LE FIX EST ICI : On utilise on_click pour appeler la fonction de suppression
+                    st.write("") # Espacement
+                    st.write("") 
+                    st.button("🗑️", key=f"del_{item['id']}", on_click=delete_trade_callback, args=(item['id'],))
+
+    else:
+        st.info("Portefeuille vide.")
 
 # ------------------------------------------
-# MODE 2 : ANALYSE PROFONDE (SOLO)
+# MODE 2 : ANALYSE PROFONDE
 # ------------------------------------------
 elif app_mode == "🔍 ANALYSE PROFONDE (Solo)":
     st.title("🧠 Analyse Deep Learning")
@@ -363,7 +414,6 @@ elif app_mode == "🔍 ANALYSE PROFONDE (Solo)":
                 df = add_indicators(df)
                 last_price = df['Close'].iloc[-1]
                 st.metric("Prix", f"{last_price:.2f}")
-                
                 res = deep_scan_asset(df)
                 if res:
                     st.subheader(f"Probabilité Hausse : {res['prob']:.1%}")
@@ -374,7 +424,7 @@ elif app_mode == "🔍 ANALYSE PROFONDE (Solo)":
             else: st.error("Erreur données")
 
 # ------------------------------------------
-# MODE 3 : LIVE MONITOR (RESTAURÉ STYLE v5)
+# MODE 3 : LIVE MONITOR
 # ------------------------------------------
 elif app_mode == "📡 LIVE MONITOR (Multi)":
     st.title("📡 LIVE SCANNER")
@@ -403,7 +453,6 @@ elif app_mode == "📡 LIVE MONITOR (Multi)":
                 df_res = df_res.sort_values(by='Signal', ascending=False)
                 
                 with placeholder.container():
-                    # Top 3
                     top = df_res.head(3)
                     cols = st.columns(3)
                     for i, (idx, row) in enumerate(top.iterrows()):
@@ -411,28 +460,23 @@ elif app_mode == "📡 LIVE MONITOR (Multi)":
                         cols[i].metric(f"{row['Nom']}", f"{row['Price']:.2f}", f"{row['Change']:.2%}")
                     
                     st.markdown("---")
-                    
-                    # === LA PARTIE QUE TU VOULAIS RECUPERER (COULEURS) ===
                     def color_rows(val):
-                        if val > 0.65: return 'color: #00ff00; font-weight: bold' # Vert
-                        if val < 0.35: return 'color: #ff4b4b; font-weight: bold' # Rouge
+                        if val > 0.65: return 'color: #00ff00; font-weight: bold'
+                        if val < 0.35: return 'color: #ff4b4b; font-weight: bold'
                         return 'color: gray'
 
-                    # J'ai remis le RSI et la coloration
                     st.dataframe(
                         df_res[['Nom', 'Price', 'Change', 'RSI', 'Prob_Up']].style.format({
                             'Price': '{:.2f}', 'Change': '{:.2%}', 'RSI': '{:.0f}', 'Prob_Up': '{:.1%}'
                         }).applymap(color_rows, subset=['Prob_Up']),
-                        use_container_width=True,
-                        height=600
+                        use_container_width=True, height=600
                     )
                     
-                    # === LA PARTIE NOTIFICATIONS (TOASTS) ===
                     for _, row in df_res.iterrows():
                         if row['Prob_Up'] > 0.75:
                             st.toast(f"🚀 {row['Nom']} : HAUSSE PROBABLE ({row['Prob_Up']:.0%})", icon="🟢")
                         elif row['Prob_Up'] < 0.25:
                             st.toast(f"📉 {row['Nom']} : CHUTE PROBABLE ({row['Prob_Up']:.0%})", icon="🔴")
             
-            time.sleep(15)
+            time.sleep(60)
             st.rerun()
