@@ -8,11 +8,13 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score
 import time
 import concurrent.futures
+import json
+import os
 
 # ==========================================
 # 1. CONFIGURATION & STYLE
 # ==========================================
-st.set_page_config(page_title="Market God v8 (Fusion)", layout="wide", page_icon="⚡")
+st.set_page_config(page_title="Market God v8 (Fusion + Save)", layout="wide", page_icon="⚡")
 
 st.markdown("""
 <style>
@@ -32,7 +34,30 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. LISTE DES MARCHÉS
+# 2. GESTION DE LA SAUVEGARDE (PERSISTANCE)
+# ==========================================
+PORTFOLIO_FILE = "portfolio.json"
+
+def load_portfolio():
+    """Charge le portefeuille depuis le fichier JSON s'il existe."""
+    if os.path.exists(PORTFOLIO_FILE):
+        try:
+            with open(PORTFOLIO_FILE, "r") as f:
+                return json.load(f)
+        except:
+            return [] # Retourne vide si erreur
+    return []
+
+def save_portfolio(portfolio_data):
+    """Sauvegarde le portefeuille dans le fichier JSON."""
+    try:
+        with open(PORTFOLIO_FILE, "w") as f:
+            json.dump(portfolio_data, f)
+    except Exception as e:
+        st.error(f"Erreur de sauvegarde : {e}")
+
+# ==========================================
+# 3. LISTE DES MARCHÉS
 # ==========================================
 MARKETS = {
     "Cryptomonnaies": {
@@ -77,7 +102,7 @@ for categorie in MARKETS.values():
         NAME_TO_TICKER[nom] = ticker
 
 # ==========================================
-# 3. FONCTIONS MOTEUR IA
+# 4. FONCTIONS MOTEUR IA
 # ==========================================
 
 def get_clean_data(ticker, period="2y"):
@@ -246,7 +271,7 @@ def quick_analyze(ticker):
     except: return None
 
 # ==========================================
-# 4. INTERFACE PRINCIPALE
+# 5. INTERFACE PRINCIPALE
 # ==========================================
 st.sidebar.header("🎛️ NAVIGATION")
 app_mode = st.sidebar.radio("Choisir le mode :", ["💼 GESTION PORTFOLIO", "🔍 ANALYSE PROFONDE (Solo)", "📡 LIVE MONITOR (Multi)"])
@@ -256,7 +281,10 @@ app_mode = st.sidebar.radio("Choisir le mode :", ["💼 GESTION PORTFOLIO", "�
 # ------------------------------------------
 if app_mode == "💼 GESTION PORTFOLIO":
     st.title("💼 Mon Portefeuille & PnL")
-    if 'portfolio' not in st.session_state: st.session_state.portfolio = []
+    
+    # --- CHARGEMENT DU PORTEFEUILLE SAUVEGARDÉ ---
+    if 'portfolio' not in st.session_state:
+        st.session_state.portfolio = load_portfolio()
 
     with st.expander("➕ Ajouter une position", expanded=False):
         c1, c2 = st.columns(2)
@@ -274,7 +302,8 @@ if app_mode == "💼 GESTION PORTFOLIO":
                     st.session_state.portfolio.append({
                         "Ticker": ticker_code, "Nom": nom_asset, "Sens": sens, "Entry": entry_input
                     })
-                    st.success("Ajouté !")
+                    save_portfolio(st.session_state.portfolio) # SAUVEGARDE IMMÉDIATE
+                    st.success("Ajouté et sauvegardé !")
                 else: st.warning("Déjà présent.")
 
     st.markdown("---")
@@ -309,11 +338,13 @@ if app_mode == "💼 GESTION PORTFOLIO":
                         </div>""", unsafe_allow_html=True)
                         if st.button(f"🗑️ {item['Ticker']}", key=f"del_{item['Ticker']}"):
                             st.session_state.portfolio = [x for x in st.session_state.portfolio if x['Ticker'] != item['Ticker']]
+                            save_portfolio(st.session_state.portfolio) # SAUVEGARDE APRÈS SUPPRESSION
                             st.rerun()
         else:
             for pos in st.session_state.portfolio: st.write(f"🔹 {pos['Nom']} ({pos['Entry']}$)")
             if st.button("Tout effacer"):
                 st.session_state.portfolio = []
+                save_portfolio([]) # SAUVEGARDE DE LA LISTE VIDE
                 st.rerun()
 
 # ------------------------------------------
@@ -403,5 +434,5 @@ elif app_mode == "📡 LIVE MONITOR (Multi)":
                         elif row['Prob_Up'] < 0.25:
                             st.toast(f"📉 {row['Nom']} : CHUTE PROBABLE ({row['Prob_Up']:.0%})", icon="🔴")
             
-            time.sleep(60)
+            time.sleep(15)
             st.rerun()
